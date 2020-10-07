@@ -1,0 +1,12 @@
+version: '3'
+services:
+  speedtest:
+    container_name: ookla-speedtest
+    build: .
+    image: speedtest-analyser
+    restart: unless-stopped
+    network_mode: bridge
+    volumes:
+      - /home/pi/docker-dash-volume:/app/data
+    ports:
+      - 8082:8050
