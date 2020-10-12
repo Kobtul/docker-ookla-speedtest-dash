@@ -1,16 +1,31 @@
+import time
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+
 import dash
-import dash_bootstrap_components as dbc
-import dash_core_components as dcc
 import dash_html_components as html
-import flask
+import dash_core_components as dcc
+import dash_bootstrap_components as dbc
 import plotly.graph_objs as go
 
+import json
+import flask
+
+import os
 from dash.dependencies import Input, Output
 
 
-import json
+# server = flask.Flask(__name__)
+app = dash.Dash(
+    __name__,
+    # server=server,
+    # external_stylesheets=[
+    #     dbc.themes.BOOTSTRAP
+    # ]
+)
+app.config.suppress_callback_exceptions = True
+UPDADE_INTERVAL = 3600
 
-data_path = '/app/data/data.jsonl'
+
 
 def dump_jsonl(data, output_path, append=False):
     """
@@ -34,9 +49,9 @@ def load_jsonl(input_path) -> list:
     print('Loaded {} records from {}'.format(len(data), input_path))
     return data
 
-def load_measurements():
-    ll = load_jsonl(data_path)
-    data = []
+def conver_json_to_data(measurements):
+    data = {}
+
     download = {}
     download['x'] = []
     download['y'] = []
@@ -49,153 +64,120 @@ def load_measurements():
     upload['name'] = 'upload'
     upload['type'] = 'line'
 
-    for item in ll:
-        download['x'].append(item['timestamp'])
-        download['y'].append(item['download']['bandwidth']/100000)
+    for item in measurements:
+        if 'timestamp' in item:
+            download['x'].append(item['timestamp'])
+            download['y'].append(item['download']['bandwidth']/100000)
 
-        upload['x'].append(item['timestamp'])
-        upload['y'].append(item['upload']['bandwidth']/100000)
-    data.append(download)
-    data.append(upload)
+            upload['x'].append(item['timestamp'])
+            upload['y'].append(item['upload']['bandwidth']/100000)
 
+    data['download'] =download
+    data['upload'] = upload
     return data
 
-data = load_measurements()
+def make_layout():
+    data = conver_json_to_data(load_jsonl('/app/data/data.jsonl'))
+    chart_title = "data updates server-side every {} seconds".format(UPDADE_INTERVAL)
 
-server = flask.Flask(__name__)
-app = dash.Dash(
-    __name__,
-    server=server,
-    external_stylesheets=[
-        dbc.themes.BOOTSTRAP
-    ]
-)
-app.config.suppress_callback_exceptions = True
-
-
-app.layout = html.Div(children=[
+    return html.Div(children=[
     html.H1(children='Ookla speed test'),
 
-    html.Div(children='''
-        Using Dash - a web application framework for Python.
-    '''),
-    html.Button('Measure speed', id='my-button'),
+    html.Div(children=chart_title),
+    html.Div(id='hidden-div', style={'display':'none'}),
+    html.Button('Measure speed', id='button-measure'),
     dcc.Graph(
-        id='example-graph',
-        figure={
+            id='chart-download',
+            figure={
             'data': [
                 go.Scatter(
-                    x=data[0]['x'],
-                    y=data[0]['y'],
+                    x=data['download']['x'],
+                    y=data['download']['y'],
                     mode='lines+markers',
                     line = dict(color='royalblue', width=3),
                     marker = dict(size=10),
-                    name=data[0]['name']
+                    name=data['download']['name']
                 ) 
             ],
             'layout': {
                 'title': 'Download speed in Mbps'
             }
         }
-    ),
-     dcc.Graph(
-        id='example-graph2',
+        ),
+        dcc.Graph(
+        id='chart-upload',
         figure={
             'data': [
                 go.Scatter(
-                    x=data[1]['x'],
-                    y=data[1]['y'],
+                    x=data['upload']['x'],
+                    y=data['upload']['y'],
                     mode='lines+markers',
                     line = dict(color='firebrick', width=3),
                     marker = dict(size=10),
-                    name=data[1]['name']
+                    name=data['upload']['name']
                 ) 
             ],
             'layout': {
                 'title': 'Upload speed in Mbps'
             }
         }
-    ),
-    dcc.Interval(
-            id='interval-component',
-            interval=600000, # in milliseconds
-            n_intervals=0
-        )
-])
+    )])
 
+# we need to set layout to be a function so that for each new page load                                                                                                       
+# the layout is re-created with the current data, otherwise they will see                                                                                                     
+# data that was generated when the Dash app was first initialised                                                                                                             
+app.layout = make_layout
 
-            
-@app.callback([
-              Output('example-graph', 'figure'),
-              Output('example-graph2', 'figure')],
-              [Input('interval-component', 'n_intervals'),
-              Input('my-button', 'n_clicks')
-              ])
-def update_graph_live(intervals,clicks):
+@app.callback(
+    Output(component_id='hidden-div', component_property='children'),
+    [Input(component_id='button-measure', component_property='n_clicks')],
+    prevent_initial_call=True
+)
+def get_new_data_button(n):
+    get_new_data()
+    return ""
 
+def get_new_data():
+    print('get_new_data')
+    """Updates the global variable 'data' with new data"""
     #bashCommand = "docker run 9dd3bd576e52"
-    #CMD ["speedtest", "-p", "no", "-f", "json-pretty", "--accept-license", "--accept-gdpr"
     bashCommand = "speedtest -p no -f json-pretty --accept-license --accept-gdpr"
     import subprocess
     process = subprocess.Popen(bashCommand.split(), stdout=subprocess.PIPE)
     output, error = process.communicate()
 
+    print('output is here')
     item = json.loads(output)
+    dump_jsonl([item],'/app/data/data.jsonl',True)
 
-    for dato in data:
-        if dato['name'] == 'download':
-            dato['x'].append(item['timestamp'])
-            dato['y'].append(item['download']['bandwidth']/100000)
-        if dato['name'] == 'upload':
-            dato['x'].append(item['timestamp'])
-            dato['y'].append(item['upload']['bandwidth']/100000)
-    dump_jsonl([item],data_path,append=True)
+def get_new_data_every(period=UPDADE_INTERVAL):
+    print('get_new_data_every')
+    """Update the data every 'period' seconds"""
+    while True:
+        print("Executing our Task on Process {}".format(os.getpid()))
+        get_new_data()
+        print("data updated")
+        time.sleep(period)
 
-    figure={
-            'data': [
-                go.Scatter(
-                    x=data[0]['x'],
-                    y=data[0]['y'],
-                    mode='lines+markers',
-                    line = dict(color='royalblue', width=3),
-                    marker = dict(size=10),
-                    
-                    
-                    name=data[0]['name']
-                ) 
-            ],
-            'layout': {
-                'title': 'Download speed in Mbps'
-            }
-        }
-    figure2={
-            'data': [
-                go.Scatter(
-                    x=data[1]['x'],
-                    y=data[1]['y'],
-                    mode='lines+markers',
-                    line = dict(color='firebrick', width=3),
-                    marker = dict(size=10),
-                    
-                    
-                    name=data[1]['name']
-                ) 
-            ],
-            'layout': {
-                'title': 'Upload speed in Mbps'
-            }
-        }
-    return figure,figure2
 
+# def start_multi():
+#     executor = ProcessPoolExecutor()
+#     executor.submit(get_new_data_every)
+    # import threading
+
+    # ookla_thread = threading.Thread(target=get_new_data_every, name="OOkla")
+    # ookla_thread.start()
+    # continue doing stuff
 
 if __name__ == '__main__':
 
-    import os
 
-    #debug = False if os.environ['DASH_DEBUG_MODE'] == 'False' else True
-    debug = True
-    app.run_server(
-        host='0.0.0.0',
-        port=8050,
-        debug=debug
-    )
+    with ProcessPoolExecutor(max_workers=1) as executor:
+        task1 = executor.submit(get_new_data_every)
+        app.run_server(
+            host='0.0.0.0',
+            port=8050,
+            debug=False
+        )
+
+        
